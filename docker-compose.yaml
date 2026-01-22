@@ -1,0 +1,144 @@
+services:
+  # -------------------------------------------------------
+  # 1. SIDEKICK PROXY (LiteLLM)
+  # Traduz OpenAI -> Gemini/Claude/Etc
+  # -------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: zep-litellm-proxy
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    environment:
+      # As chaves são injetadas pelo Coolify
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Variáveis para controle dinâmico do modelo alvo
+      - TARGET_MODEL=${TARGET_MODEL:-gemini/gemini-1.5-flash}
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug" ]
+    networks:
+      - zep-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # -------------------------------------------------------
+  # 2. ZEP (Motor de Memória)
+  # -------------------------------------------------------
+  zep:
+    image: zepai/zep:latest
+    ports:
+      - "${ZEP_PORT:-8000}:8000"
+    volumes:
+      - ./zep.yaml:/app/zep.yaml
+    environment:
+      - ZEP_CONFIG_FILE=zep.yaml
+      # Aponta para o LiteLLM
+      - OPENAI_API_KEY=sk-proxy-key
+      - OPENAI_API_BASE=http://litellm:4000
+      # Logging
+      - ZEP_LOG_LEVEL=${LOG_LEVEL:-info}
+    networks:
+      - zep-network
+    depends_on:
+      graphiti:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+
+  # -------------------------------------------------------
+  # 3. DATABASE (Postgres + pgvector)
+  # -------------------------------------------------------
+  db:
+    image: ankane/pgvector:v0.5.1
+    container_name: zep-postgres
+    restart: on-failure
+    shm_size: "128mb"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=postgres
+    networks:
+      - zep-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - zep-db:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+
+  # -------------------------------------------------------
+  # 4. GRAPHITI (Knowledge Graph)
+  # -------------------------------------------------------
+  graphiti:
+    image: zepai/graphiti:0.3
+    ports:
+      - "${GRAPHITI_PORT:-8003}:8003"
+    networks:
+      - zep-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8003/healthcheck')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      # Conexão com o Proxy
+      - OPENAI_API_KEY=sk-proxy-key
+      - OPENAI_BASE_URL=http://litellm:4000
+      # O Graphiti pede "proxy-model", o LiteLLM traduz para o que você definir no .env
+      - MODEL_NAME=proxy-model
+      
+      # Neo4j Config
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-zepzepzep}
+      - PORT=8003
+
+  # -------------------------------------------------------
+  # 5. NEO4J (Graph Database)
+  # -------------------------------------------------------
+  neo4j:
+    image: neo4j:5.22.0
+    networks:
+      - zep-network
+    healthcheck:
+      test: wget http://localhost:7687 || exit 1
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j_data:/data
+    environment:
+      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-zepzepzep}
+
+volumes:
+  neo4j_data:
+  zep-db:
+
+networks:
+  zep-network:
+    driver: bridge
