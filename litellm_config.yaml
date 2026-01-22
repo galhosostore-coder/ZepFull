@@ -1,0 +1,19 @@
+model_list:
+  # 1. Modelo "proxy-model"
+  # É esse nome que o Graphiti e o Zep vão chamar internamente.
+  # O LiteLLM vai olhar a variável 'TARGET_MODEL' no .env para saber qual IA usar de verdade.
+  - model_name: proxy-model
+    litellm_params:
+      model: os.environ/TARGET_MODEL
+      api_key: os.environ/GEMINI_API_KEY # Padrão tenta pegar a do Google, mas o LiteLLM é esperto
+
+  # 2. Fallbacks de compatibilidade (Caso alguma lib hardcoded peça gpt-3.5)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: os.environ/TARGET_MODEL
+      api_key: os.environ/GEMINI_API_KEY
+  
+  - model_name: gpt-4
+    litellm_params:
+      model: os.environ/TARGET_MODEL
+      api_key: os.environ/GEMINI_API_KEY
