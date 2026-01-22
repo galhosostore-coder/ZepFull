@@ -1,0 +1,17 @@
+server:
+  port: 8000
+  web_enabled: true
+
+log:
+  level: "info"
+
+# Como estamos usando proxy, a configuração LLM fica genérica
+llm:
+  model: "proxy-model"
+  completion_model: "proxy-model"
+  # O embedding também passará pelo proxy se configurado,
+  # mas por padrão o Zep CE pode usar embeddings locais.
+  
+nlp:
+  # Usa modelos locais para ser mais rápido e barato na versão CE
+  min_sentence_length: 10
